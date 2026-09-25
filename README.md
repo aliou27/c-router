@@ -49,21 +49,21 @@ software router.
 This project is developed incrementally through a series
 of milestones.
 
-- M0 — Project foundation
-- M1 — Linux network namespaces
-- M2 — Packet capture
-- M3 — Ethernet and IPv4 parsing
-- M4 — Routing table
-- M5 — Packet forwarding
-- M6 — ICMP
-- M7 — ARP
-- M8 — TCP/UDP forwarding
-- M9 — Firewall
-- M10 — NAT
-- M11 — Configuration
-- M12 — Observability
-- M13 — Performance
-- M14 — Multithreading
-- M15 — IPv6
-- M16 — DPDK
-- M17 — FD.io VPP
+[-] M0 : Project foundation
+[] M1 : Linux network namespaces
+[] M2 : Packet capture
+[] M3 : Ethernet and IPv4 parsing
+[] M4 : Routing table
+[] M5 : Packet forwarding
+[] M6 : ICMP
+[] M7 : ARP
+[] M8 : TCP/UDP forwarding
+[] M9 : Firewall
+[] M10 : NAT
+[] M11 : Configuration
+[] M12 : Observability
+[] M13 : Performance
+[] M14 : Multithreading
+[] M15 : IPv6
+[] M16 : DPDK
+[] M17 : FD.io VPP
