@@ -1,0 +1,16 @@
+# Build
+c-router
+*.o
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Debug
+*.dSYM/
+
+# Temporary
+*.log
