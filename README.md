@@ -50,7 +50,7 @@ This project is developed incrementally through a series
 of milestones.
 
 [-] M0 : Project foundation
-[] M1 : Linux network namespaces
+[-] M1 : Linux network namespaces
 [] M2 : Packet capture
 [] M3 : Ethernet and IPv4 parsing
 [] M4 : Routing table
