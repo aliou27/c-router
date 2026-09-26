@@ -199,9 +199,6 @@ close the socket
 
 ### Result: 3 pings from pc-a to pc-b, then Ctrl+C
 
-```text
-PASTE YOUR OUTPUT HERE
-```
 
 ![Capture statistics](images/m2-step3-stats.png)
 
