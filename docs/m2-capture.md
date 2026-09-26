@@ -60,23 +60,7 @@ sudo ip netns exec pc-a ping -c 3 10.0.2.10
 ## Capture 1: with IPv6 enabled
 
 The program was started right after `make lab-up`, before any ping:
-
-```text
-#1  90 bytes  33 33 00 00 00 16 0e cc 7e cd bb 97 86 dd 60 00
-#2  86 bytes  33 33 ff 8a 01 0b d6 d2 de 8a 01 0b 86 dd 60 00
-#3  86 bytes  33 33 ff cd bb 97 0e cc 7e cd bb 97 86 dd 60 00
-#4  90 bytes  33 33 00 00 00 16 d6 d2 de 8a 01 0b 86 dd 60 00
-#5  90 bytes  33 33 00 00 00 16 d6 d2 de 8a 01 0b 86 dd 60 00
-#6  70 bytes  33 33 00 00 00 02 d6 d2 de 8a 01 0b 86 dd 60 00
-#7  90 bytes  33 33 00 00 00 16 0e cc 7e cd bb 97 86 dd 60 00
-#8  70 bytes  33 33 00 00 00 02 0e cc 7e cd bb 97 86 dd 60 00
-#9  90 bytes  33 33 00 00 00 16 0e cc 7e cd bb 97 86 dd 60 00
-#10  90 bytes  33 33 00 00 00 16 d6 d2 de 8a 01 0b 86 dd 60 00
-#11  42 bytes  ff ff ff ff ff ff 0e cc 7e cd bb 97 08 06 00 01
-#12  42 bytes  0e cc 7e cd bb 97 d6 d2 de 8a 01 0b 08 06 00 01
-#13  98 bytes  d6 d2 de 8a 01 0b 0e cc 7e cd bb 97 08 00 45 00
-#14  98 bytes  0e cc 7e cd bb 97 d6 d2 de 8a 01 0b 08 00 45 00
-```
+![alt text](image.png)
 
 Frames were captured even without a ping. Bytes 12-13 (`86 dd`) show they are IPv6. Linux enables IPv6 automatically on every interface, and each interface announces itself when it comes up:
 
@@ -86,6 +70,10 @@ Frames were captured even without a ping. Bytes 12-13 (`86 dd`) show they are IP
 - 70-byte frames to `33:33:00:00:00:02`: Router Solicitations ("is there an IPv6 router here?"), repeated because nobody answers.
 
 To keep captures focused on IPv4 until M15, IPv6 is now disabled in the lab script (`net.ipv6.conf.all.disable_ipv6=1` in each namespace).
+
+![alt text](image-1.png)
+
+
 
 ## Capture 2: IPv6 disabled, 3 pings from pc-a to pc-b
 
@@ -102,7 +90,7 @@ To keep captures focused on IPv4 until M15, IPv6 is now disabled in the lab scri
 #10  42 bytes  02 58 29 f9 1a 9c 0a a0 3b 81 74 77 08 06 00 01
 ```
 
-![Capture with IPv6 disabled](images/m2-capture-clean.png)
+![alt text](image-2.png)
 
 ### Identifying the machines
 
@@ -135,4 +123,72 @@ Each line shows: destination MAC (bytes 0-5), source MAC (bytes 6-11), type (byt
 
 - [x] Step 1: raw socket capture on one interface
 - [ ] Step 2: decode the Ethernet header (MAC addresses and type)
+- [ ] Step 3: packet counters and statistics on exit
+
+![alt text](image.png)## Step 2: Decoding the Ethernet header
+
+### Goal
+
+Replace the raw byte dump with a readable line showing the source MAC, the destination MAC and the protocol carried by the frame.
+
+### Ethernet header layout
+
+The Ethernet header is always the first 14 bytes of the frame:
+
+```text
+byte:   0  1  2  3  4  5 | 6  7  8  9 10 11 | 12 13
+        destination MAC  | source MAC       | EtherType
+```
+
+### Logic
+
+- **MAC addresses:** bytes 0-5 (destination) and 6-11 (source) are printed as six 2-digit hex values separated by `:`. The source is printed first so the output reads as `sender -> receiver`.
+- **EtherType:** bytes 12-13 form one 16-bit number in network byte order (big-endian): `type = byte12 x 256 + byte13`, written in C as `(frame[12] << 8) | frame[13]`.
+
+| EtherType | Protocol |
+|-----------|----------|
+| `0x0800`  | IPv4     |
+| `0x0806`  | ARP      |
+| `0x86DD`  | IPv6     |
+
+- **Length check:** a frame shorter than 14 bytes is reported and skipped. Without this check, the program would read bytes left over from the previous frame in the buffer (an out-of-bounds read). This is the first input validation in the router.
+- **Pointers instead of copies:** the MAC addresses are not copied. The program uses pointers to their position in the buffer (`frame` and `frame + 6`).
+
+### Code structure
+
+Two helper functions keep the receive loop short:
+
+- `print_mac(const unsigned char *mac)`: prints 6 bytes as `aa:bb:cc:dd:ee:ff`.
+- `ethertype_name(unsigned int type)`: returns `"IPv4"`, `"ARP"`, `"IPv6"` or `"other"`.
+
+### Algorithm
+
+```text
+FOR each received frame:
+    IF size < 14 THEN
+        display "too short", skip the frame
+    destination <- bytes 0-5
+    source      <- bytes 6-11
+    type        <- byte12 x 256 + byte13
+    display: count, size, source -> destination, protocol name
+```
+
+### Capture: 3 pings from pc-a to pc-b
+
+```text
+PASTE YOUR OUTPUT HERE
+```
+
+![Decoded Ethernet capture](images/m2-step2-decoded.png)
+
+### Observations
+
+- The same frames as Step 1 are now readable without counting bytes by hand.
+- ARP requests go to `ff:ff:ff:ff:ff:ff` (broadcast). ARP replies and pings are sent directly between the two MAC addresses (unicast).
+- The EtherType is enough to know how to read the rest of the frame. Step M3 will use it to decide whether to parse an IPv4 header.
+
+## Status
+
+- [x] Step 1: raw socket capture on one interface
+- [x] Step 2: decode the Ethernet header (MAC addresses and type)
 - [ ] Step 3: packet counters and statistics on exit
