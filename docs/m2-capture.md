@@ -119,76 +119,128 @@ Each line shows: destination MAC (bytes 0-5), source MAC (bytes 6-11), type (byt
 - **`45` at byte 14** is the first byte of the IPv4 header: version 4, header length 5 x 4 = 20 bytes.
 - **MAC addresses change between runs.** Linux assigns a random MAC address to each veth interface when it is created. The router code must never assume fixed MAC addresses.
 
-## Status
-
-- [x] Step 1: raw socket capture on one interface
-- [ ] Step 2: decode the Ethernet header (MAC addresses and type)
-- [ ] Step 3: packet counters and statistics on exit
-
-![alt text](image.png)## Step 2: Decoding the Ethernet header
+## Step 3: Counters and statistics on exit
 
 ### Goal
 
-Replace the raw byte dump with a readable line showing the source MAC, the destination MAC and the protocol carried by the frame.
+Count frames by type while capturing, and print a summary when the program is stopped with Ctrl+C. This is the first form of observability in the router, similar to the interface counters shown by `show interfaces` on a hardware router.
 
-### Ethernet header layout
+### Counters
 
-The Ethernet header is always the first 14 bytes of the frame:
+All counters are grouped in one structure:
 
-```text
-byte:   0  1  2  3  4  5 | 6  7  8  9 10 11 | 12 13
-        destination MAC  | source MAC       | EtherType
+| Counter     | Incremented when                        |
+|-------------|-----------------------------------------|
+| `total`     | any frame is received                   |
+| `ipv4`      | EtherType is `0x0800`                   |
+| `arp`       | EtherType is `0x0806`                   |
+| `ipv6`      | EtherType is `0x86DD`                   |
+| `other`     | any other EtherType                     |
+| `too_short` | the frame is shorter than 14 bytes      |
+| `bytes`     | always, by the size of the frame        |
+
+### Handling Ctrl+C
+
+Pressing Ctrl+C makes the kernel send the `SIGINT` signal. By default, `SIGINT` terminates the program immediately, so the statistics would never be printed.
+
+The program installs a **signal handler** with `sigaction()`. Because a signal can arrive at any moment (for example in the middle of a `printf`), the handler does only one thing: it sets a flag.
+
+```c
+static volatile sig_atomic_t stop_requested = 0;
+
+static void on_sigint(int signum)
+{
+    (void)signum;
+    stop_requested = 1;
+}
 ```
 
-### Logic
+- `volatile` forces the program to read the real current value of the flag, since it can change outside the normal flow.
+- `sig_atomic_t` is a type that can be written safely from a signal handler.
+- The statistics are printed by the main program, at a safe point, never inside the handler.
 
-- **MAC addresses:** bytes 0-5 (destination) and 6-11 (source) are printed as six 2-digit hex values separated by `:`. The source is printed first so the output reads as `sender -> receiver`.
-- **EtherType:** bytes 12-13 form one 16-bit number in network byte order (big-endian): `type = byte12 x 256 + byte13`, written in C as `(frame[12] << 8) | frame[13]`.
+### Interaction with `recv()`
 
-| EtherType | Protocol |
-|-----------|----------|
-| `0x0800`  | IPv4     |
-| `0x0806`  | ARP      |
-| `0x86DD`  | IPv6     |
+The program spends most of its time blocked in `recv()`. The handler is installed **without** the `SA_RESTART` flag, so when `SIGINT` arrives:
 
-- **Length check:** a frame shorter than 14 bytes is reported and skipped. Without this check, the program would read bytes left over from the previous frame in the buffer (an out-of-bounds read). This is the first input validation in the router.
-- **Pointers instead of copies:** the MAC addresses are not copied. The program uses pointers to their position in the buffer (`frame` and `frame + 6`).
+1. The handler sets `stop_requested = 1`.
+2. `recv()` is interrupted and returns `-1` with `errno == EINTR`.
+3. The loop treats `EINTR` as a normal wake-up, not an error, and checks the flag.
+4. The loop ends, the statistics are printed and the socket is closed.
 
-### Code structure
+Any other error from `recv()` is reported with `perror` and stops the loop.
 
-Two helper functions keep the receive loop short:
-
-- `print_mac(const unsigned char *mac)`: prints 6 bytes as `aa:bb:cc:dd:ee:ff`.
-- `ethertype_name(unsigned int type)`: returns `"IPv4"`, `"ARP"`, `"IPv6"` or `"other"`.
+```text
+recv() blocked ──Ctrl+C──► handler: stop_requested = 1
+                           recv() returns -1, errno = EINTR
+                           loop checks the flag and exits
+                           print statistics
+                           close the socket
+```
 
 ### Algorithm
 
 ```text
-FOR each received frame:
-    IF size < 14 THEN
-        display "too short", skip the frame
-    destination <- bytes 0-5
-    source      <- bytes 6-11
-    type        <- byte12 x 256 + byte13
-    display: count, size, source -> destination, protocol name
+install handler: on SIGINT, set stop_requested = 1
+
+WHILE stop_requested = 0:
+    size <- receive a frame
+    IF size = -1:
+        IF error is EINTR: continue (the flag will be checked)
+        ELSE: report the error, exit the loop
+    total <- total + 1, bytes <- bytes + size
+    IF size < 14: too_short <- too_short + 1, skip
+    read the EtherType and increment the matching counter
+    display the frame
+
+print the statistics
+close the socket
 ```
 
-### Capture: 3 pings from pc-a to pc-b
+### Result: 3 pings from pc-a to pc-b, then Ctrl+C
 
 ```text
 PASTE YOUR OUTPUT HERE
 ```
 
-![Decoded Ethernet capture](images/m2-step2-decoded.png)
+![Capture statistics](images/m2-step3-stats.png)
 
-### Observations
+### Verification
 
-- The same frames as Step 1 are now readable without counting bytes by hand.
-- ARP requests go to `ff:ff:ff:ff:ff:ff` (broadcast). ARP replies and pings are sent directly between the two MAC addresses (unicast).
-- The EtherType is enough to know how to read the rest of the frame. Step M3 will use it to decide whether to parse an IPv4 header.
+The byte counter can be checked by hand:
+
+```text
+6 IPv4 frames x 98 bytes = 588
+4 ARP frames  x 42 bytes = 168
+                   Total = 756 bytes
+```
+
+## M2 summary
+
+| Step | Result |
+|------|--------|
+| 1 | Raw `AF_PACKET` socket bound to one interface, receiving every Ethernet frame |
+| 2 | Ethernet header decoded: source MAC, destination MAC, EtherType, with a length check |
+| 3 | Per-protocol counters and a clean shutdown on Ctrl+C using a signal handler |
+
+### What was learned
+
+- How a user-space program receives packets through the kernel (system calls, sockets, file descriptors).
+- Why raw sockets require root privileges.
+- How to read a fixed binary header safely: check the length first, then read fields at known offsets.
+- Network byte order (big-endian) and how to rebuild a 16-bit field from two bytes.
+- How signals work, why a signal handler must stay minimal, and how `EINTR` interrupts blocking calls.
+
+### Limitations (addressed in later milestones)
+
+- Only one interface is captured at a time. The router will need to listen on eth0 and eth1 together.
+- The program only observes. Linux still forwards the packets (M5 will change this).
+- Only the Ethernet header is decoded. The IPv4 header is parsed in M3.
 
 ## Status
 
 - [x] Step 1: raw socket capture on one interface
 - [x] Step 2: decode the Ethernet header (MAC addresses and type)
-- [ ] Step 3: packet counters and statistics on exit
+- [x] Step 3: packet counters and statistics on exit
+
+**M2 complete.**
