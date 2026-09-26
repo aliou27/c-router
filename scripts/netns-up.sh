@@ -17,6 +17,12 @@ ip netns add pc-a
 ip netns add router
 ip netns add pc-b
 
+# 1b. Disable IPv6 until M15 to keep captures clean
+for ns in pc-a router pc-b; do
+  ip netns exec "$ns" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
+  ip netns exec "$ns" sysctl -qw net.ipv6.conf.default.disable_ipv6=1
+done
+
 # 2. Cables
 ip link add eth0 netns pc-a type veth peer name eth0 netns router
 ip link add eth0 netns pc-b type veth peer name eth1 netns router
