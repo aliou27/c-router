@@ -20,7 +20,45 @@ At this stage the program is a pure observer. The Linux kernel still forwards pa
 
 No external library is used, only the C standard library and Linux system headers. libpcap was deliberately avoided in order to work directly with the kernel interface, and because the same raw socket will later be used to transmit packets (M5).
 
-## Algorithm
+## How to run
+
+```bash
+make
+make lab-up
+sudo ip netns exec router ./c-router eth1
+```
+
+In a second terminal, generate traffic:
+
+```bash
+sudo ip netns exec pc-a ping -c 3 10.0.2.10
+```
+
+![Ping from pc-a to pc-b](images/m2-ping.png)
+
+```text
+PING 10.0.2.10 (10.0.2.10) 56(84) bytes of data.
+64 bytes from 10.0.2.10: icmp_seq=1 ttl=63 time=0.107 ms
+64 bytes from 10.0.2.10: icmp_seq=2 ttl=63 time=0.133 ms
+64 bytes from 10.0.2.10: icmp_seq=3 ttl=63 time=0.178 ms
+
+--- 10.0.2.10 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2032ms
+```
+
+## Error cases tested
+
+| Command | Result | Reason |
+|---|---|---|
+| `./c-router` | Usage message | No interface given |
+| `./c-router eth1` | `socket: Operation not permitted` | Raw sockets require root |
+| `sudo ip netns exec router ./c-router eth9` | `if_nametoindex: No such device` | Interface does not exist |
+
+---
+
+## Step 1: Raw capture
+
+### Algorithm
 
 ```text
 0. Check that an interface name was given
@@ -35,47 +73,65 @@ No external library is used, only the C standard library and Linux system header
 
 Every system call is checked for errors, and the reason is displayed with `perror`.
 
-## How to run
+### Capture 1: with IPv6 enabled
 
-```bash
-make
-make lab-up
-sudo ip netns exec router ./c-router eth1
+The program was started right after `make lab-up`, then 3 pings were sent from pc-a to pc-b.
+
+![Capture 1 with IPv6 enabled](images/m2-capture-ipv6.png)
+
+```text
+#1  90 bytes  33 33 00 00 00 16 0e cc 7e cd bb 97 86 dd 60 00
+#2  86 bytes  33 33 ff 8a 01 0b d6 d2 de 8a 01 0b 86 dd 60 00
+#3  86 bytes  33 33 ff cd bb 97 0e cc 7e cd bb 97 86 dd 60 00
+#4  90 bytes  33 33 00 00 00 16 d6 d2 de 8a 01 0b 86 dd 60 00
+#5  90 bytes  33 33 00 00 00 16 d6 d2 de 8a 01 0b 86 dd 60 00
+#6  70 bytes  33 33 00 00 00 02 d6 d2 de 8a 01 0b 86 dd 60 00
+#7  90 bytes  33 33 00 00 00 16 0e cc 7e cd bb 97 86 dd 60 00
+#8  70 bytes  33 33 00 00 00 02 0e cc 7e cd bb 97 86 dd 60 00
+#9  90 bytes  33 33 00 00 00 16 0e cc 7e cd bb 97 86 dd 60 00
+#10  90 bytes  33 33 00 00 00 16 d6 d2 de 8a 01 0b 86 dd 60 00
+#11  42 bytes  ff ff ff ff ff ff 0e cc 7e cd bb 97 08 06 00 01
+#12  42 bytes  0e cc 7e cd bb 97 d6 d2 de 8a 01 0b 08 06 00 01
+#13  98 bytes  d6 d2 de 8a 01 0b 0e cc 7e cd bb 97 08 00 45 00
+#14  98 bytes  0e cc 7e cd bb 97 d6 d2 de 8a 01 0b 08 00 45 00
+#15  70 bytes  33 33 00 00 00 02 d6 d2 de 8a 01 0b 86 dd 60 00
+#16  70 bytes  33 33 00 00 00 02 0e cc 7e cd bb 97 86 dd 60 00
+#17  98 bytes  d6 d2 de 8a 01 0b 0e cc 7e cd bb 97 08 00 45 00
+#18  98 bytes  0e cc 7e cd bb 97 d6 d2 de 8a 01 0b 08 00 45 00
+#19  98 bytes  d6 d2 de 8a 01 0b 0e cc 7e cd bb 97 08 00 45 00
+#20  98 bytes  0e cc 7e cd bb 97 d6 d2 de 8a 01 0b 08 00 45 00
+#21  42 bytes  0e cc 7e cd bb 97 d6 d2 de 8a 01 0b 08 06 00 01
+#22  42 bytes  d6 d2 de 8a 01 0b 0e cc 7e cd bb 97 08 06 00 01
+#23  70 bytes  33 33 00 00 00 02 d6 d2 de 8a 01 0b 86 dd 60 00
+#24  70 bytes  33 33 00 00 00 02 0e cc 7e cd bb 97 86 dd 60 00
 ```
 
-In a second terminal:
-
-```bash
-sudo ip netns exec pc-a ping -c 3 10.0.2.10
-```
-
-## Error cases tested
-
-| Command | Result | Reason |
-|---|---|---|
-| `./c-router` | Usage message | No interface given |
-| `./c-router eth1` | `socket: Operation not permitted` | Raw sockets require root |
-| `sudo ip netns exec router ./c-router eth9` | `if_nametoindex: No such device` | Interface does not exist |
-
-## Capture 1: with IPv6 enabled
-
-The program was started right after `make lab-up`, before any ping:
-![alt text](image.png)
-
-Frames were captured even without a ping. Bytes 12-13 (`86 dd`) show they are IPv6. Linux enables IPv6 automatically on every interface, and each interface announces itself when it comes up:
+Frames #1 to #10 arrived before any ping. Bytes 12-13 (`86 dd`) show they are IPv6. Linux enables IPv6 automatically on every interface, and each interface announces itself when it comes up:
 
 - Destination `33:33:...` is an IPv6 multicast MAC address.
 - 86-byte frames to `33:33:ff:...`: Duplicate Address Detection ("is anyone already using my IPv6 address?").
 - 90-byte frames to `33:33:00:00:00:16`: multicast group membership reports.
 - 70-byte frames to `33:33:00:00:00:02`: Router Solicitations ("is there an IPv6 router here?"), repeated because nobody answers.
 
-To keep captures focused on IPv4 until M15, IPv6 is now disabled in the lab script (`net.ipv6.conf.all.disable_ipv6=1` in each namespace).
+The ping itself is visible in frames #11 to #22: ARP (`08 06`) followed by IPv4 (`08 00`).
 
-![alt text](image-1.png)
+### Disabling IPv6 in the lab
 
+To keep captures focused on IPv4 until M15, IPv6 is disabled in each namespace by the lab script (`scripts/netns-up.sh`), before the interfaces are created:
 
+![IPv6 disabled in the lab script](images/m2-disable-ipv6.png)
 
-## Capture 2: IPv6 disabled, 3 pings from pc-a to pc-b
+```bash
+# 1b. Disable IPv6 until M15 to keep captures clean
+for ns in pc-a router pc-b; do
+  ip netns exec "$ns" sysctl -qw net.ipv6.conf.all.disable_ipv6=1
+  ip netns exec "$ns" sysctl -qw net.ipv6.conf.default.disable_ipv6=1
+done
+```
+
+### Capture 2: IPv6 disabled, 3 pings from pc-a to pc-b
+
+![Capture 2 with IPv6 disabled](images/m2-capture-clean.png)
 
 ```text
 #1  42 bytes  ff ff ff ff ff ff 0a a0 3b 81 74 77 08 06 00 01
@@ -90,16 +146,7 @@ To keep captures focused on IPv4 until M15, IPv6 is now disabled in the lab scri
 #10  42 bytes  02 58 29 f9 1a 9c 0a a0 3b 81 74 77 08 06 00 01
 ```
 
-![alt text](image-2.png)
-
-### Identifying the machines
-
-Frame #3 is the ping leaving the router toward pc-b, so:
-
-- `0a:a0:3b:81:74:77` = router eth1
-- `02:58:29:f9:1a:9c` = pc-b
-
-### Reading the frames
+**Identifying the machines.** Frame #3 is the ping leaving the router toward pc-b, so `0a:a0:3b:81:74:77` is router eth1 and `02:58:29:f9:1a:9c` is pc-b.
 
 Each line shows: destination MAC (bytes 0-5), source MAC (bytes 6-11), type (bytes 12-13), then the start of the payload.
 
@@ -119,6 +166,59 @@ Each line shows: destination MAC (bytes 0-5), source MAC (bytes 6-11), type (byt
 - **`45` at byte 14** is the first byte of the IPv4 header: version 4, header length 5 x 4 = 20 bytes.
 - **MAC addresses change between runs.** Linux assigns a random MAC address to each veth interface when it is created. The router code must never assume fixed MAC addresses.
 
+---
+
+## Step 2: Decoding the Ethernet header
+
+### Goal
+
+Replace the raw byte dump with a readable line: source MAC, destination MAC and the protocol carried by the frame.
+
+### Ethernet header layout
+
+The Ethernet header is always the first 14 bytes of the frame:
+
+```text
+byte:   0  1  2  3  4  5 | 6  7  8  9 10 11 | 12 13
+        destination MAC  | source MAC       | EtherType
+```
+
+### Logic
+
+- **MAC addresses:** bytes 0-5 (destination) and 6-11 (source) are printed as six 2-digit hex values separated by `:`. The source is printed first so the output reads as `sender -> receiver`.
+- **EtherType:** bytes 12-13 form one 16-bit number in network byte order: `type = byte12 x 256 + byte13`.
+
+| EtherType | Protocol |
+|-----------|----------|
+| `0x0800`  | IPv4     |
+| `0x0806`  | ARP      |
+| `0x86DD`  | IPv6     |
+
+- **Length check:** a frame shorter than 14 bytes is reported and skipped. Without this check, the program would read bytes left over from the previous frame in the buffer (an out-of-bounds read).
+- **Pointers instead of copies:** the MAC addresses are not copied. The program points to their position in the buffer (`frame` and `frame + 6`).
+
+### Result: 3 pings from pc-a to pc-b
+
+![Decoded Ethernet headers](images/m2-step2-decoded.png)
+
+```text
+Listening on eth1...
+#1  42 bytes  9e:ef:d1:02:3b:b1 -> ff:ff:ff:ff:ff:ff  ARP (0x0806)
+#2  42 bytes  4e:0c:35:4e:f5:37 -> 9e:ef:d1:02:3b:b1  ARP (0x0806)
+#3  98 bytes  9e:ef:d1:02:3b:b1 -> 4e:0c:35:4e:f5:37  IPv4 (0x0800)
+#4  98 bytes  4e:0c:35:4e:f5:37 -> 9e:ef:d1:02:3b:b1  IPv4 (0x0800)
+#5  98 bytes  9e:ef:d1:02:3b:b1 -> 4e:0c:35:4e:f5:37  IPv4 (0x0800)
+#6  98 bytes  4e:0c:35:4e:f5:37 -> 9e:ef:d1:02:3b:b1  IPv4 (0x0800)
+#7  98 bytes  9e:ef:d1:02:3b:b1 -> 4e:0c:35:4e:f5:37  IPv4 (0x0800)
+#8  98 bytes  4e:0c:35:4e:f5:37 -> 9e:ef:d1:02:3b:b1  IPv4 (0x0800)
+#9  42 bytes  4e:0c:35:4e:f5:37 -> 9e:ef:d1:02:3b:b1  ARP (0x0806)
+#10  42 bytes  9e:ef:d1:02:3b:b1 -> 4e:0c:35:4e:f5:37  ARP (0x0806)
+```
+
+In this run, `9e:ef:d1:02:3b:b1` is router eth1 (it sends the ARP broadcast) and `4e:0c:35:4e:f5:37` is pc-b. The MAC addresses differ from Step 1 because the lab was rebuilt, but the pattern is identical: ARP request and reply, three echo request/reply pairs, then an ARP check.
+
+---
+
 ## Step 3: Counters and statistics on exit
 
 ### Goal
@@ -126,8 +226,6 @@ Each line shows: destination MAC (bytes 0-5), source MAC (bytes 6-11), type (byt
 Count frames by type while capturing, and print a summary when the program is stopped with Ctrl+C. This is the first form of observability in the router, similar to the interface counters shown by `show interfaces` on a hardware router.
 
 ### Counters
-
-All counters are grouped in one structure:
 
 | Counter     | Incremented when                        |
 |-------------|-----------------------------------------|
@@ -168,8 +266,6 @@ The program spends most of its time blocked in `recv()`. The handler is installe
 3. The loop treats `EINTR` as a normal wake-up, not an error, and checks the flag.
 4. The loop ends, the statistics are printed and the socket is closed.
 
-Any other error from `recv()` is reported with `perror` and stops the loop.
-
 ```text
 recv() blocked ──Ctrl+C──► handler: stop_requested = 1
                            recv() returns -1, errno = EINTR
@@ -197,12 +293,20 @@ print the statistics
 close the socket
 ```
 
-### Result: 3 pings from pc-a to pc-b, then Ctrl+C
+### Expected statistics for 3 pings
 
+For the 10 frames of a 3-ping exchange (6 IPv4 frames of 98 bytes, 4 ARP frames of 42 bytes), the summary printed on Ctrl+C is:
 
-![Capture statistics](images/m2-step3-stats.png)
-
-### Verification
+```text
+--- Capture statistics (eth1) ---
+Total frames : 10
+  IPv4       : 6
+  ARP        : 4
+  IPv6       : 0
+  Other      : 0
+  Too short  : 0
+Total bytes  : 756
+```
 
 The byte counter can be checked by hand:
 
@@ -211,6 +315,8 @@ The byte counter can be checked by hand:
 4 ARP frames  x 42 bytes = 168
                    Total = 756 bytes
 ```
+
+---
 
 ## M2 summary
 
