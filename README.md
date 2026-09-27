@@ -56,7 +56,7 @@ The router is built incrementally. Each milestone adds one capability and is doc
 |----|-----------------------------|-------------------------------------------------------|-------------|------|
 | M0 | Project foundation          | Repository layout, Makefile, Clang toolchain          | Done        | |
 | M1 | Network namespace lab       | `pc-a` ↔ `router` ↔ `pc-b` with veth pairs           | Done        | [M1](docs/m1-lab.md) |
-| M2 | Packet capture              | Raw sockets, receiving Ethernet frames in C           | In progress | |
+| M2 | Packet capture              | Raw sockets, receiving Ethernet frames in C           | Done  | [M2](docs/m2-capture.md) |
 | M3 | Ethernet + IPv4 parsing     | Header parsing, addresses, TTL, checksums             | Planned     | |
 
 ### Phase 2: A working router
