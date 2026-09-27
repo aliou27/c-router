@@ -293,11 +293,23 @@ print the statistics
 close the socket
 ```
 
-### Expected statistics for 3 pings
+### Result: 3 pings from pc-a to pc-b, then Ctrl+C
 
-For the 10 frames of a 3-ping exchange (6 IPv4 frames of 98 bytes, 4 ARP frames of 42 bytes), the summary printed on Ctrl+C is:
+![Capture statistics](images/m2-step3-stats.png)
 
 ```text
+Listening on eth1... (Ctrl+C to stop)
+#1  42 bytes  72:3c:21:46:36:31 -> ff:ff:ff:ff:ff:ff  ARP (0x0806)
+#2  42 bytes  aa:84:c4:ab:13:0e -> 72:3c:21:46:36:31  ARP (0x0806)
+#3  98 bytes  72:3c:21:46:36:31 -> aa:84:c4:ab:13:0e  IPv4 (0x0800)
+#4  98 bytes  aa:84:c4:ab:13:0e -> 72:3c:21:46:36:31  IPv4 (0x0800)
+#5  98 bytes  72:3c:21:46:36:31 -> aa:84:c4:ab:13:0e  IPv4 (0x0800)
+#6  98 bytes  aa:84:c4:ab:13:0e -> 72:3c:21:46:36:31  IPv4 (0x0800)
+#7  98 bytes  72:3c:21:46:36:31 -> aa:84:c4:ab:13:0e  IPv4 (0x0800)
+#8  98 bytes  aa:84:c4:ab:13:0e -> 72:3c:21:46:36:31  IPv4 (0x0800)
+#9  42 bytes  aa:84:c4:ab:13:0e -> 72:3c:21:46:36:31  ARP (0x0806)
+#10  42 bytes  72:3c:21:46:36:31 -> aa:84:c4:ab:13:0e  ARP (0x0806)
+^C
 --- Capture statistics (eth1) ---
 Total frames : 10
   IPv4       : 6
@@ -307,6 +319,8 @@ Total frames : 10
   Too short  : 0
 Total bytes  : 756
 ```
+
+Ctrl+C did not kill the program: the handler set the flag, `recv()` returned with `EINTR`, the loop ended and the statistics were printed before the socket was closed.
 
 The byte counter can be checked by hand:
 

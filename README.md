@@ -48,7 +48,7 @@ software router.
 
 The router is built incrementally. Each milestone adds one capability and is documented with tests and packet captures.
 
-**Progress: 2 / 18 milestones complete**
+**Progress: 4 / 18 milestones complete** (M0 to M3)
 
 ### Phase 1: Foundations
 
@@ -57,13 +57,13 @@ The router is built incrementally. Each milestone adds one capability and is doc
 | M0 | Project foundation          | Repository layout, Makefile, Clang toolchain          | Done        | |
 | M1 | Network namespace lab       | `pc-a` ↔ `router` ↔ `pc-b` with veth pairs           | Done        | [M1](docs/m1-lab.md) |
 | M2 | Packet capture              | Raw sockets, receiving Ethernet frames in C           | Done  | [M2](docs/m2-capture.md) |
-| M3 | Ethernet + IPv4 parsing     | Header parsing, addresses, TTL, checksums             | Planned     | |
+| M3 | Ethernet + IPv4 parsing     | Header parsing, addresses, TTL, checksums             | Done        | [M3](docs/m3-ipv4.md) |
 
 ### Phase 2: A working router
 
 | #  | Milestone                   | What it covers                                        | Status      | Docs |
 |----|-----------------------------|-------------------------------------------------------|-------------|------|
-| M4 | Routing table               | Longest-prefix match lookup                           | Planned     | |
+| M4 | Routing table               | Longest-prefix match lookup                           | In progress | |
 | M5 | Packet forwarding           | TTL decrement, checksum update, transmit              | Planned     | |
 | M6 | ICMP                        | Echo reply, TTL exceeded, destination unreachable     | Planned     | |
 | M7 | ARP                         | IP-to-MAC resolution, neighbor table                  | Planned     | |
