@@ -63,7 +63,7 @@ The router is built incrementally. Each milestone adds one capability and is doc
 
 | #  | Milestone                   | What it covers                                        | Status      | Docs |
 |----|-----------------------------|-------------------------------------------------------|-------------|------|
-| M4 | Routing table               | Longest-prefix match lookup                           | In progress | |
+| M4 | Routing table               | Longest-prefix match lookup                           | In progress | [M4](docs/m4-routing.md) |
 | M5 | Packet forwarding           | TTL decrement, checksum update, transmit              | Planned     | |
 | M6 | ICMP                        | Echo reply, TTL exceeded, destination unreachable     | Planned     | |
 | M7 | ARP                         | IP-to-MAC resolution, neighbor table                  | Planned     | |

@@ -69,6 +69,45 @@ static const char *protocol_name(unsigned int protocol)
     return "other";
 }
 
+/* ---- M4: one line of the routing table ---- */
+struct route {
+    unsigned char network[4];   /* e.g. 10.0.2.0      */
+    unsigned char mask[4];      /* e.g. 255.255.255.0 */
+    const char   *door;         /* e.g. "eth1"        */
+    const char   *text;         /* e.g. "10.0.2.0/24" (for printing) */
+};
+
+/* ---- M4: how many lines the table has. Change it when adding a route. ---- */
+#define ROUTE_COUNT 2
+
+/* ---- M4: the routing table, our "ip route" commands ---- */
+static const struct route routing_table[ROUTE_COUNT] = {
+    { {10, 0, 1, 0}, {255, 255, 255, 0}, "eth0", "10.0.1.0/24" },   /* line 0 */
+    { {10, 0, 2, 0}, {255, 255, 255, 0}, "eth1", "10.0.2.0/24" },   /* line 1 */
+};
+
+/* ---- M4: does the destination fit in this line? 1 = yes, 0 = no ---- */
+static int route_matches(const unsigned char *dest, int line)
+{
+    for (int i = 0; i < 4; i++) {
+        if ((dest[i] & routing_table[line].mask[i]) != routing_table[line].network[i]) {
+            return 0;   /* different: does not fit */
+        }
+    }
+    return 1;           /* all 4 numbers match: fits */
+}
+
+/* ---- M4: try every line, return the line number that fits, or -1 ---- */
+static int lookup_route(const unsigned char *dest)
+{
+    for (int line = 0; line < ROUTE_COUNT; line++) {
+        if (route_matches(dest, line)) {
+            return line;
+        }
+    }
+    return -1;
+}
+
 /* ---- M3: read and print the IPv4 part (boxes 14 to 33) ---- */
 static void print_ipv4(const unsigned char *frame, size_t size)
 {
@@ -117,6 +156,14 @@ static void print_ipv4(const unsigned char *frame, size_t size)
     printf(" -> ");
     print_ip(to_ip);
     printf("  TTL %u  %s  len %u\n", ttl, protocol_name(protocol), total_size);
+
+    /* 8. M4: which door? */
+    int line = lookup_route(to_ip);
+    if (line == -1) {
+        printf("    route: none, drop\n");
+    } else {
+        printf("    route: %s via %s\n", routing_table[line].text, routing_table[line].door);
+    }
 }
 
 /* ---- Print the counting paper ---- */
