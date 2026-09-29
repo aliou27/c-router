@@ -73,17 +73,22 @@ static const char *protocol_name(unsigned int protocol)
 struct route {
     unsigned char network[4];   /* e.g. 10.0.2.0      */
     unsigned char mask[4];      /* e.g. 255.255.255.0 */
+    int           prefix;       /* e.g. 24 (the /24): how precise the route is */
     const char   *door;         /* e.g. "eth1"        */
     const char   *text;         /* e.g. "10.0.2.0/24" (for printing) */
 };
 
 /* ---- M4: how many lines the table has. Change it when adding a route. ---- */
-#define ROUTE_COUNT 2
+#define ROUTE_COUNT 5
 
 /* ---- M4: the routing table, our "ip route" commands ---- */
+/* The default route is first on purpose: the order must not matter. */
 static const struct route routing_table[ROUTE_COUNT] = {
-    { {10, 0, 1, 0}, {255, 255, 255, 0}, "eth0", "10.0.1.0/24" },   /* line 0 */
-    { {10, 0, 2, 0}, {255, 255, 255, 0}, "eth1", "10.0.2.0/24" },   /* line 1 */
+    { {0, 0, 0, 0},    {0, 0, 0, 0},         0,  "eth0", "0.0.0.0/0"    },   /* line 0: default route */
+    { {10, 0, 0, 0},   {255, 255, 0, 0},     16, "eth0", "10.0.0.0/16"  },   /* line 1 */
+    { {10, 0, 1, 0},   {255, 255, 255, 0},   24, "eth0", "10.0.1.0/24"  },   /* line 2 */
+    { {10, 0, 2, 0},   {255, 255, 255, 0},   24, "eth1", "10.0.2.0/24"  },   /* line 3 */
+    { {10, 0, 2, 10},  {255, 255, 255, 255}, 32, "eth1", "10.0.2.10/32" },   /* line 4: host route */
 };
 
 /* ---- M4: does the destination fit in this line? 1 = yes, 0 = no ---- */
@@ -97,15 +102,20 @@ static int route_matches(const unsigned char *dest, int line)
     return 1;           /* all 4 numbers match: fits */
 }
 
-/* ---- M4: try every line, return the line number that fits, or -1 ---- */
+/* ---- M4: check every line, keep the most precise one that fits (biggest /) ---- */
+/* Returns the winning line number, or -1 if no line fits. */
 static int lookup_route(const unsigned char *dest)
 {
+    int best = -1;                          /* no winner yet */
+
     for (int line = 0; line < ROUTE_COUNT; line++) {
         if (route_matches(dest, line)) {
-            return line;
+            if (best == -1 || routing_table[line].prefix > routing_table[best].prefix) {
+                best = line;                /* more precise than the previous winner */
+            }
         }
     }
-    return -1;
+    return best;
 }
 
 /* ---- M3: read and print the IPv4 part (boxes 14 to 33) ---- */
