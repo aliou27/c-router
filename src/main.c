@@ -5,6 +5,7 @@
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 #include <net/if.h>
+#include <poll.h>                /* M5: poll, watch several sockets at once */
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -118,6 +119,32 @@ static int lookup_route(const unsigned char *dest)
     return best;
 }
 
+/* ---- M5: IPv4 header checksum ----
+ * header      = where the IPv4 header starts (frame + 14)
+ * header_size = its length in bytes (20 without options)
+ * 1. glue the header into 2-byte numbers and add them,
+ *    skipping bytes 10-11 (the checksum itself counts as 0)
+ * 2. fold: while the sum is too big for 2 bytes, add the overflow back in
+ * 3. flip: 65535 - sum
+ */
+static unsigned int ipv4_checksum(const unsigned char *header, unsigned int header_size)
+{
+    unsigned long sum = 0;
+
+    for (unsigned int i = 0; i < header_size; i += 2) {
+        if (i == 10) {
+            continue;                       /* skip the checksum field */
+        }
+        sum += header[i] * 256 + header[i + 1];
+    }
+
+    while (sum > 65535) {
+        sum = (sum % 65536) + (sum / 65536);
+    }
+
+    return 65535 - (unsigned int)sum;
+}
+
 /* ---- M3: read and print the IPv4 part (boxes 14 to 33) ---- */
 static void print_ipv4(const unsigned char *frame, size_t size)
 {
@@ -174,6 +201,24 @@ static void print_ipv4(const unsigned char *frame, size_t size)
     } else {
         printf("    route: %s via %s\n", routing_table[line].text, routing_table[line].door);
     }
+
+    /* 9. M5: is the checksum in the packet correct? */
+    const unsigned char *header = frame + 14;              /* the IPv4 header starts at byte 14 */
+    unsigned int stored   = frame[24] * 256 + frame[25];   /* checksum = bytes 24-25 */
+    unsigned int computed = ipv4_checksum(header, header_size);
+    printf("    checksum: 0x%04x %s\n", stored, computed == stored ? "OK" : "BAD");
+
+    /* 10. M5: what forwarding would change (on a copy, the packet is not modified) */
+    if (ttl <= 1) {
+        printf("    forward: TTL %u, expired, drop\n", ttl);
+    } else {
+        unsigned char copy[60];                            /* an IPv4 header is at most 60 bytes */
+        memcpy(copy, header, header_size);
+        copy[8] = (unsigned char)(ttl - 1);                /* TTL = byte 8 of the header (byte 22 of the frame) */
+        unsigned int new_checksum = ipv4_checksum(copy, header_size);
+        printf("    forward: TTL %u -> %u, checksum 0x%04x -> 0x%04x\n",
+               ttl, ttl - 1, stored, new_checksum);
+    }
 }
 
 /* ---- Print the counting paper ---- */
@@ -189,11 +234,267 @@ static void print_stats(const struct stats *s, const char *interfaceName)
     printf("Total bytes  : %llu\n", s->bytes);
 }
 
+/* ======================================================================
+ * M5: FORWARDING
+ * Run with:  sudo ip netns exec router ./c-router --forward
+ * The program listens on eth0 AND eth1, and forwards IPv4 packets itself.
+ * ====================================================================== */
+
+/* ---- M5: the router's two doors (fixed MACs, set in scripts/netns-up.sh) ---- */
+struct iface {
+    const char   *name;     /* "eth0" */
+    unsigned char mac[6];   /* the router's own MAC on this door */
+    unsigned char ip[4];    /* the router's own IP on this door */
+    int           sock;     /* the raw socket opened on this door */
+};
+
+#define IFACE_COUNT 2
+static struct iface ifaces[IFACE_COUNT] = {
+    { "eth0", {0x02, 0x00, 0x00, 0x00, 0x01, 0x01}, {10, 0, 1, 1}, -1 },
+    { "eth1", {0x02, 0x00, 0x00, 0x00, 0x02, 0x01}, {10, 0, 2, 1}, -1 },
+};
+
+/* ---- M5: the neighbours' MACs (static ARP, like "arp 10.0.2.10 ..." on Cisco) ---- */
+struct neighbor {
+    unsigned char ip[4];
+    unsigned char mac[6];
+};
+
+#define NEIGHBOR_COUNT 2
+static const struct neighbor neighbors[NEIGHBOR_COUNT] = {
+    { {10, 0, 1, 10}, {0x02, 0x00, 0x00, 0x00, 0x01, 0x0a} },   /* pc-a */
+    { {10, 0, 2, 10}, {0x02, 0x00, 0x00, 0x00, 0x02, 0x0a} },   /* pc-b */
+};
+
+/* ---- M5: forwarding counters ---- */
+static unsigned long forwarded = 0;
+static unsigned long dropped   = 0;
+
+/* ---- M5: open a raw socket bound to one door (same steps as M2). -1 on error ---- */
+static int open_raw_socket(const char *name)
+{
+    int sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    if (sock < 0) {
+        perror("socket");
+        return -1;
+    }
+
+    unsigned int index = if_nametoindex(name);
+    if (index == 0) {
+        perror(name);
+        close(sock);
+        return -1;
+    }
+
+    struct sockaddr_ll form;
+    memset(&form, 0, sizeof form);
+    form.sll_family   = AF_PACKET;
+    form.sll_protocol = htons(ETH_P_ALL);
+    form.sll_ifindex  = (int)index;
+
+    if (bind(sock, (struct sockaddr *)&form, sizeof form) < 0) {
+        perror("bind");
+        close(sock);
+        return -1;
+    }
+    return sock;
+}
+
+/* ---- M5: which door has this name? Returns 0, 1, or -1 ---- */
+static int find_iface(const char *name)
+{
+    for (int i = 0; i < IFACE_COUNT; i++) {
+        if (strcmp(ifaces[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* ---- M5: the MAC of a neighbour, or NULL if unknown ---- */
+static const unsigned char *find_neighbor_mac(const unsigned char *ip)
+{
+    for (int i = 0; i < NEIGHBOR_COUNT; i++) {
+        if (memcmp(neighbors[i].ip, ip, 4) == 0) {
+            return neighbors[i].mac;
+        }
+    }
+    return NULL;
+}
+
+/* ---- M5: print why a packet was dropped ---- */
+static void drop(const char *in_name, const unsigned char *frame, const char *reason)
+{
+    dropped++;
+    printf("[%s] DROP  ", in_name);
+    print_ip(frame + 26);
+    printf(" -> ");
+    print_ip(frame + 30);
+    printf("  %s\n", reason);
+}
+
+/* ---- M5: receive one packet on door "in" and forward it if we should ---- */
+static void handle_packet(int in)
+{
+    unsigned char frame[2048];
+    struct sockaddr_ll from;
+    socklen_t from_len = sizeof from;
+
+    /* 1. Receive, and learn the direction of the packet */
+    ssize_t size = recvfrom(ifaces[in].sock, frame, sizeof frame, 0,
+                            (struct sockaddr *)&from, &from_len);
+    if (size < 0) {
+        return;
+    }
+
+    /* 2. Ignore the packets we sent ourselves (they pass by this door too) */
+    if (from.sll_pkttype == PACKET_OUTGOING) {
+        return;
+    }
+
+    /* 3. Only IPv4, long enough, and addressed to this door's MAC.
+     *    Everything else (ARP, broadcasts) is left to Linux. */
+    if (size < 34) return;
+    if (frame[12] * 256 + frame[13] != 0x0800) return;
+    if (memcmp(frame, ifaces[in].mac, 6) != 0) return;
+
+    /* 4. Same safety checks as M3 */
+    unsigned int version     = frame[14] / 16;
+    unsigned int header_size = (frame[14] % 16) * 4;
+    unsigned int total_size  = frame[16] * 256 + frame[17];
+    if (version != 4 || header_size < 20 || 14 + header_size > (size_t)size ||
+        total_size < header_size || 14 + total_size > (size_t)size) {
+        drop(ifaces[in].name, frame, "bad IPv4 header");
+        return;
+    }
+    if (ipv4_checksum(frame + 14, header_size) != frame[24] * 256u + frame[25]) {
+        drop(ifaces[in].name, frame, "bad checksum");
+        return;
+    }
+
+    /* 5. Packets for the router itself (e.g. ping 10.0.1.1) are for Linux, not forwarded */
+    const unsigned char *dest = frame + 30;
+    for (int i = 0; i < IFACE_COUNT; i++) {
+        if (memcmp(dest, ifaces[i].ip, 4) == 0) {
+            return;
+        }
+    }
+
+    /* 6. Route lookup (M4) */
+    int line = lookup_route(dest);
+    if (line == -1) {
+        drop(ifaces[in].name, frame, "no route");
+        return;
+    }
+    int out = find_iface(routing_table[line].door);
+    if (out == -1) {
+        drop(ifaces[in].name, frame, "route to an unknown door");
+        return;
+    }
+
+    /* 7. TTL */
+    unsigned int ttl = frame[22];
+    if (ttl <= 1) {
+        drop(ifaces[in].name, frame, "TTL expired");
+        return;
+    }
+
+    /* 8. Next machine's MAC (static ARP) */
+    const unsigned char *next_mac = find_neighbor_mac(dest);
+    if (next_mac == NULL) {
+        drop(ifaces[in].name, frame, "no MAC for this destination");
+        return;
+    }
+
+    /* 9. Rewrite: TTL - 1, new checksum, new MACs */
+    frame[22] = (unsigned char)(ttl - 1);
+    unsigned int checksum = ipv4_checksum(frame + 14, header_size);
+    frame[24] = (unsigned char)(checksum / 256);
+    frame[25] = (unsigned char)(checksum % 256);
+    memcpy(frame,     next_mac,         6);    /* destination MAC = next machine */
+    memcpy(frame + 6, ifaces[out].mac,  6);    /* source MAC      = our outgoing door */
+
+    /* 10. Send it out of the chosen door */
+    if (send(ifaces[out].sock, frame, (size_t)size, 0) < 0) {
+        perror("send");
+        drop(ifaces[in].name, frame, "send failed");
+        return;
+    }
+
+    forwarded++;
+    printf("[%s -> %s]  ", ifaces[in].name, ifaces[out].name);
+    print_ip(frame + 26);
+    printf(" -> ");
+    print_ip(dest);
+    printf("  %s  TTL %u -> %u  route %s\n",
+           protocol_name(frame[23]), ttl, ttl - 1, routing_table[line].text);
+}
+
+/* ---- M5: router mode: open both doors, then forward until Ctrl+C ---- */
+static int run_router(void)
+{
+    for (int i = 0; i < IFACE_COUNT; i++) {
+        ifaces[i].sock = open_raw_socket(ifaces[i].name);
+        if (ifaces[i].sock < 0) {
+            return 1;
+        }
+    }
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGINT, &sa, NULL) < 0) {
+        perror("sigaction");
+        return 1;
+    }
+
+    /* poll() watches both sockets and wakes up when one of them has a packet */
+    struct pollfd watch[IFACE_COUNT];
+    for (int i = 0; i < IFACE_COUNT; i++) {
+        watch[i].fd     = ifaces[i].sock;
+        watch[i].events = POLLIN;             /* "tell me when there is something to read" */
+    }
+
+    printf("Router running on eth0 and eth1... (Ctrl+C to stop)\n");
+
+    while (!stop_requested) {
+        int ready = poll(watch, IFACE_COUNT, -1);     /* -1 = wait as long as needed */
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;                             /* woken up by Ctrl+C */
+            }
+            perror("poll");
+            break;
+        }
+        for (int i = 0; i < IFACE_COUNT; i++) {
+            if (watch[i].revents & POLLIN) {          /* this door has a packet */
+                handle_packet(i);
+            }
+        }
+    }
+
+    printf("\n--- Router statistics ---\n");
+    printf("Forwarded : %lu\n", forwarded);
+    printf("Dropped   : %lu\n", dropped);
+
+    for (int i = 0; i < IFACE_COUNT; i++) {
+        close(ifaces[i].sock);
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
+    /* ---- M5: router mode ---- */
+    if (argc == 2 && strcmp(argv[1], "--forward") == 0) {
+        return run_router();
+    }
     /* ---- Step 1: which door to watch ---- */
     if (argc != 2) {
-        fprintf(stderr, "Usage: %s <interface>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <interface>    (watch one door)\n"
+                        "       %s --forward      (router mode, M5)\n", argv[0], argv[0]);
         return 1;
     }
     const char *interfaceName = argv[1];

@@ -6,7 +6,7 @@ TARGET = c-router
 SRC = $(wildcard src/*.c)
 OBJ = $(SRC:.c=.o)
 
-.PHONY: all clean run lab-up lab-down
+.PHONY: all clean run lab-up lab-down lab-router
 
 all: $(TARGET)
 
@@ -27,3 +27,7 @@ lab-up:
 
 lab-down:
 	sudo ./scripts/netns-down.sh
+
+# M5: lab with kernel forwarding OFF, so the C router does the forwarding
+lab-router:
+	sudo ./scripts/netns-up.sh off

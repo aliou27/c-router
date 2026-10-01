@@ -27,6 +27,13 @@ done
 ip link add eth0 netns pc-a type veth peer name eth0 netns router
 ip link add eth0 netns pc-b type veth peer name eth1 netns router
 
+# 2b. Fixed MAC addresses (M5): the C router needs to know them in advance.
+#     Pattern: 02:00:00:00:<network>:<host>
+ip -n pc-a   link set eth0 address 02:00:00:00:01:0a   # pc-a       10.0.1.10
+ip -n router link set eth0 address 02:00:00:00:01:01   # router eth0 10.0.1.1
+ip -n router link set eth1 address 02:00:00:00:02:01   # router eth1 10.0.2.1
+ip -n pc-b   link set eth0 address 02:00:00:00:02:0a   # pc-b       10.0.2.10
+
 # 3. Addresses
 ip -n pc-a   addr add 10.0.1.10/24 dev eth0
 ip -n router addr add 10.0.1.1/24  dev eth0
@@ -46,7 +53,13 @@ ip -n pc-b   link set eth0 up
 ip -n pc-a route add default via 10.0.1.1
 ip -n pc-b route add default via 10.0.2.1
 
-# 6. Linux does the routing for now (M5: set this to 0)
-ip netns exec router sysctl -qw net.ipv4.ip_forward=1
-
-echo "Lab ready. Test: sudo ip netns exec pc-a ping -c 3 10.0.2.10"
+# 6. Who forwards packets in the router namespace?
+#    "./netns-up.sh"      -> the Linux kernel forwards (M1 to M4)
+#    "./netns-up.sh off"  -> kernel forwarding OFF, the C router must do it (M5)
+if [[ "${1:-on}" == "off" ]]; then
+  ip netns exec router sysctl -qw net.ipv4.ip_forward=0
+  echo "Lab ready. Kernel forwarding is OFF: start the C router, then ping."
+else
+  ip netns exec router sysctl -qw net.ipv4.ip_forward=1
+  echo "Lab ready. Kernel forwarding is ON. Test: sudo ip netns exec pc-a ping -c 3 10.0.2.10"
+fi
