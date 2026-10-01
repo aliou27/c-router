@@ -6,7 +6,7 @@ TARGET = c-router
 SRC = $(wildcard src/*.c)
 OBJ = $(SRC:.c=.o)
 
-.PHONY: all clean run lab-up lab-down lab-router
+.PHONY: all clean run lab-up lab-down lab-router vpp-up vpp-down
 
 all: $(TARGET)
 
@@ -31,3 +31,10 @@ lab-down:
 # M5: lab with kernel forwarding OFF, so the C router does the forwarding
 lab-router:
 	sudo ./scripts/netns-up.sh off
+
+# M17: same lab, but VPP is the router (run inside the Ubuntu 24.04 "vpp" VM)
+vpp-up:
+	sudo ./scripts/vpp-up.sh
+
+vpp-down:
+	sudo ./scripts/vpp-down.sh

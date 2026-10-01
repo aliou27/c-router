@@ -48,7 +48,7 @@ software router.
 
 The router is built incrementally. Each milestone adds one capability and is documented with tests and packet captures.
 
-**Progress: 8 / 18 milestones complete** (M0 to M6, M9)
+**Progress: 9 / 18 milestones complete** (M0 to M6, M9, M17)
 
 ### Phase 1: Foundations
 
@@ -86,4 +86,4 @@ The router is built incrementally. Each milestone adds one capability and is doc
 | M14 | Multithreading             | Worker threads, queues, lock contention               | Planned     | |
 | M15 | IPv6                       | IPv6 forwarding, ICMPv6, Neighbor Discovery           | Planned     | |
 | M16 | DPDK                       | User-space packet I/O, poll-mode drivers              | Planned     | |
-| M17 | FD.io VPP                  | Vector packet processing, comparison with this router | Planned     | |
+| M17 | FD.io VPP                  | Vector packet processing, comparison with this router | Done        | [M17](docs/m17-vpp.md) |
