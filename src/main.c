@@ -333,6 +333,101 @@ static void drop(const char *in_name, const unsigned char *frame, const char *re
     printf("  %s\n", reason);
 }
 
+/* ---- M6: checksum over any block of bytes (used for ICMP) ----
+ * Same 3 steps as ipv4_checksum: add 2-byte pairs, fold, flip.
+ * The checksum field inside the block must be 0 before calling it.
+ */
+static unsigned int inet_checksum(const unsigned char *data, unsigned int length)
+{
+    unsigned long sum = 0;
+
+    for (unsigned int i = 0; i + 1 < length; i += 2) {
+        sum += data[i] * 256 + data[i + 1];
+    }
+    if (length % 2 == 1) {
+        sum += data[length - 1] * 256;          /* odd length: last byte alone */
+    }
+
+    while (sum > 65535) {
+        sum = (sum % 65536) + (sum / 65536);
+    }
+    return 65535 - (unsigned int)sum;
+}
+
+/* ---- M6: ICMP message types ---- */
+#define ICMP_DEST_UNREACHABLE  3     /* code 0 = network, code 1 = host */
+#define ICMP_TIME_EXCEEDED     11    /* code 0 = TTL reached 0 in transit */
+
+static unsigned long icmp_sent = 0;
+
+/* ---- M6: send an ICMP error back to the sender of "orig" ----
+ * in          = the door the original packet came in on (the error goes back out of it)
+ * orig        = the original frame
+ * header_size = the original IPv4 header size (20 without options)
+ * total_size  = the original IPv4 total length
+ */
+static void send_icmp_error(int in, const unsigned char *orig,
+                            unsigned int header_size, unsigned int total_size,
+                            unsigned char type, unsigned char code)
+{
+    /* Rule: never answer an ICMP error with an ICMP error (only echo request/reply may trigger one) */
+    if (orig[23] == 1) {
+        if (total_size <= header_size) return;
+        unsigned char orig_icmp_type = orig[14 + header_size];
+        if (orig_icmp_type != 0 && orig_icmp_type != 8) return;
+    }
+
+    /* What we copy back: the original IP header + its first 8 data bytes (if present) */
+    unsigned int copy_len = header_size + 8;
+    if (copy_len > total_size) copy_len = total_size;
+
+    unsigned char pkt[14 + 20 + 8 + 68];                 /* 68 = max header (60) + 8 */
+    memset(pkt, 0, sizeof pkt);
+    unsigned char *ip   = pkt + 14;
+    unsigned char *icmp = ip + 20;
+    unsigned int ip_total = 20 + 8 + copy_len;
+
+    /* 1. Ethernet: back to the sender, from this door */
+    memcpy(pkt,     orig + 6,        6);                 /* TO   = original source MAC */
+    memcpy(pkt + 6, ifaces[in].mac,  6);                 /* FROM = this door's MAC */
+    pkt[12] = 0x08;
+    pkt[13] = 0x00;                                      /* type = IPv4 */
+
+    /* 2. IPv4 header */
+    ip[0]  = 0x45;                                       /* version 4, header 20 bytes */
+    ip[2]  = (unsigned char)(ip_total / 256);
+    ip[3]  = (unsigned char)(ip_total % 256);
+    ip[8]  = 64;                                         /* TTL */
+    ip[9]  = 1;                                          /* protocol = ICMP */
+    memcpy(ip + 12, ifaces[in].ip, 4);                   /* FROM = this door's IP (e.g. 10.0.1.1) */
+    memcpy(ip + 16, orig + 26,     4);                   /* TO   = original sender's IP */
+    unsigned int ip_sum = ipv4_checksum(ip, 20);
+    ip[10] = (unsigned char)(ip_sum / 256);
+    ip[11] = (unsigned char)(ip_sum % 256);
+
+    /* 3. ICMP: type, code, checksum (0 for now), 4 unused bytes, then the copy */
+    icmp[0] = type;
+    icmp[1] = code;
+    memcpy(icmp + 8, orig + 14, copy_len);
+    unsigned int icmp_sum = inet_checksum(icmp, 8 + copy_len);
+    icmp[2] = (unsigned char)(icmp_sum / 256);
+    icmp[3] = (unsigned char)(icmp_sum % 256);
+
+    /* 4. Send it back out of the door it came in on */
+    if (send(ifaces[in].sock, pkt, 14 + ip_total, 0) < 0) {
+        perror("send icmp");
+        return;
+    }
+    icmp_sent++;
+    printf("        ICMP %s sent to ",
+           type == ICMP_TIME_EXCEEDED ? "time exceeded" :
+           code == 1 ? "host unreachable" : "network unreachable");
+    print_ip(orig + 26);
+    printf(" from ");
+    print_ip(ifaces[in].ip);
+    printf("\n");
+}
+
 /* ---- M5: receive one packet on door "in" and forward it if we should ---- */
 static void handle_packet(int in)
 {
@@ -384,6 +479,7 @@ static void handle_packet(int in)
     int line = lookup_route(dest);
     if (line == -1) {
         drop(ifaces[in].name, frame, "no route");
+        send_icmp_error(in, frame, header_size, total_size, ICMP_DEST_UNREACHABLE, 0);
         return;
     }
     int out = find_iface(routing_table[line].door);
@@ -396,6 +492,7 @@ static void handle_packet(int in)
     unsigned int ttl = frame[22];
     if (ttl <= 1) {
         drop(ifaces[in].name, frame, "TTL expired");
+        send_icmp_error(in, frame, header_size, total_size, ICMP_TIME_EXCEEDED, 0);
         return;
     }
 
@@ -403,6 +500,7 @@ static void handle_packet(int in)
     const unsigned char *next_mac = find_neighbor_mac(dest);
     if (next_mac == NULL) {
         drop(ifaces[in].name, frame, "no MAC for this destination");
+        send_icmp_error(in, frame, header_size, total_size, ICMP_DEST_UNREACHABLE, 1);
         return;
     }
 
@@ -478,6 +576,7 @@ static int run_router(void)
     printf("\n--- Router statistics ---\n");
     printf("Forwarded : %lu\n", forwarded);
     printf("Dropped   : %lu\n", dropped);
+    printf("ICMP sent : %lu\n", icmp_sent);
 
     for (int i = 0; i < IFACE_COUNT; i++) {
         close(ifaces[i].sock);

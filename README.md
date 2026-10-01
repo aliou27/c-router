@@ -48,7 +48,7 @@ software router.
 
 The router is built incrementally. Each milestone adds one capability and is documented with tests and packet captures.
 
-**Progress: 6 / 18 milestones complete** (M0 to M5)
+**Progress: 7 / 18 milestones complete** (M0 to M6)
 
 ### Phase 1: Foundations
 
@@ -65,7 +65,7 @@ The router is built incrementally. Each milestone adds one capability and is doc
 |----|-----------------------------|-------------------------------------------------------|-------------|------|
 | M4 | Routing table               | Longest-prefix match lookup                           | Done        | [M4](docs/m4-routing.md) |
 | M5 | Packet forwarding           | TTL decrement, checksum update, transmit              | Done        | [M5](docs/m5-forwarding.md) |
-| M6 | ICMP                        | Echo reply, TTL exceeded, destination unreachable     | Planned     | |
+| M6 | ICMP                        | Echo reply, TTL exceeded, destination unreachable     | Done        | [M6](docs/m6-icmp.md) |
 | M7 | ARP                         | IP-to-MAC resolution, neighbor table                  | Planned     | |
 | M8 | TCP/UDP traffic             | HTTP, SSH and DNS through the router                  | Planned     | |
 
