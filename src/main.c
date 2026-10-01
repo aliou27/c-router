@@ -428,6 +428,99 @@ static void send_icmp_error(int in, const unsigned char *orig,
     printf("\n");
 }
 
+/* ======================================================================
+ * M9: FIREWALL (stateless, like a Cisco ACL)
+ * Rules are checked top to bottom, the first match wins, default = DENY.
+ * ====================================================================== */
+
+#define PROTO_ANY  0
+#define PROTO_ICMP 1
+#define PROTO_TCP  6
+#define PROTO_UDP  17
+#define PORT_ANY   0
+
+struct fw_rule {
+    int           allow;          /* 1 = ALLOW, 0 = DENY */
+    unsigned char protocol;       /* PROTO_ICMP, PROTO_TCP, PROTO_UDP or PROTO_ANY */
+    unsigned char src_net[4];
+    unsigned char src_mask[4];    /* 0.0.0.0 = any source */
+    unsigned int  src_port;       /* PORT_ANY = any */
+    unsigned char dst_net[4];
+    unsigned char dst_mask[4];    /* 0.0.0.0 = any destination */
+    unsigned int  dst_port;       /* PORT_ANY = any */
+    const char   *text;           /* for printing */
+    unsigned long hits;           /* how many packets matched this rule */
+};
+
+#define FW_RULE_COUNT 4
+static struct fw_rule fw_rules[FW_RULE_COUNT] = {
+    /* 1. ping and traceroute */
+    { 1, PROTO_ICMP, {0,0,0,0},     {0,0,0,0},         PORT_ANY,
+                     {0,0,0,0},     {0,0,0,0},         PORT_ANY, "ALLOW icmp any -> any", 0 },
+    /* 2. pc-a (or anyone) can reach the web server on pc-b, port 8080 */
+    { 1, PROTO_TCP,  {0,0,0,0},     {0,0,0,0},         PORT_ANY,
+                     {10,0,2,10},   {255,255,255,255}, 8080,     "ALLOW tcp any -> 10.0.2.10:8080", 0 },
+    /* 3. ...and its answers can come back (stateless: needs its own rule) */
+    { 1, PROTO_TCP,  {10,0,2,10},   {255,255,255,255}, 8080,
+                     {0,0,0,0},     {0,0,0,0},         PORT_ANY, "ALLOW tcp 10.0.2.10:8080 -> any", 0 },
+    /* 4. telnet is blocked explicitly */
+    { 0, PROTO_TCP,  {0,0,0,0},     {0,0,0,0},         PORT_ANY,
+                     {0,0,0,0},     {0,0,0,0},         23,       "DENY  tcp any -> any:23 (telnet)", 0 },
+};
+static unsigned long fw_default_hits = 0;   /* packets that matched no rule */
+
+/* ---- M9: is this IP inside net/mask? 1 = yes, 0 = no ---- */
+static int ip_in_net(const unsigned char *ip, const unsigned char *net, const unsigned char *mask)
+{
+    for (int i = 0; i < 4; i++) {
+        if ((ip[i] & mask[i]) != net[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* ---- M9: read the ports of a TCP/UDP packet. 1 = ok, 0 = packet too short ---- */
+static int read_ports(const unsigned char *frame, unsigned int header_size, size_t size,
+                      unsigned int *src_port, unsigned int *dst_port)
+{
+    *src_port = 0;
+    *dst_port = 0;
+    if (frame[23] != PROTO_TCP && frame[23] != PROTO_UDP) {
+        return 1;                                   /* no ports for ICMP: stay 0 */
+    }
+    unsigned int l4 = 14 + header_size;             /* where TCP/UDP starts (usually byte 34) */
+    if (l4 + 4 > size) {
+        return 0;                                   /* not enough bytes for the ports */
+    }
+    *src_port = frame[l4]     * 256 + frame[l4 + 1];
+    *dst_port = frame[l4 + 2] * 256 + frame[l4 + 3];
+    return 1;
+}
+
+/* ---- M9: check the rules. Returns the matching rule number, or -1 (default deny) ---- */
+static int check_firewall(const unsigned char *frame, unsigned int header_size, size_t size)
+{
+    unsigned char protocol = frame[23];
+    unsigned int src_port, dst_port;
+    if (!read_ports(frame, header_size, size, &src_port, &dst_port)) {
+        fw_default_hits++;
+        return -1;
+    }
+
+    for (int r = 0; r < FW_RULE_COUNT; r++) {
+        if (fw_rules[r].protocol != PROTO_ANY && fw_rules[r].protocol != protocol)       continue;
+        if (!ip_in_net(frame + 26, fw_rules[r].src_net, fw_rules[r].src_mask))           continue;
+        if (!ip_in_net(frame + 30, fw_rules[r].dst_net, fw_rules[r].dst_mask))           continue;
+        if (fw_rules[r].src_port != PORT_ANY && fw_rules[r].src_port != src_port)        continue;
+        if (fw_rules[r].dst_port != PORT_ANY && fw_rules[r].dst_port != dst_port)        continue;
+        fw_rules[r].hits++;
+        return r;                                   /* first match wins */
+    }
+    fw_default_hits++;
+    return -1;                                      /* nothing matched: default deny */
+}
+
 /* ---- M5: receive one packet on door "in" and forward it if we should ---- */
 static void handle_packet(int in)
 {
@@ -473,6 +566,16 @@ static void handle_packet(int in)
         if (memcmp(dest, ifaces[i].ip, 4) == 0) {
             return;
         }
+    }
+
+    /* 5b. M9: firewall, before routing (no need to route a packet we will block) */
+    int rule = check_firewall(frame, header_size, (size_t)size);
+    if (rule == -1 || !fw_rules[rule].allow) {
+        char reason[96];
+        snprintf(reason, sizeof reason, "firewall: %s",
+                 rule == -1 ? "default deny" : fw_rules[rule].text);
+        drop(ifaces[in].name, frame, reason);       /* silent: no ICMP for blocked packets */
+        return;
     }
 
     /* 6. Route lookup (M4) */
@@ -524,8 +627,13 @@ static void handle_packet(int in)
     print_ip(frame + 26);
     printf(" -> ");
     print_ip(dest);
-    printf("  %s  TTL %u -> %u  route %s\n",
-           protocol_name(frame[23]), ttl, ttl - 1, routing_table[line].text);
+    printf("  %s", protocol_name(frame[23]));
+    unsigned int src_port, dst_port;
+    if (frame[23] != PROTO_ICMP && read_ports(frame, header_size, (size_t)size, &src_port, &dst_port)) {
+        printf(" %u -> %u", src_port, dst_port);
+    }
+    printf("  TTL %u -> %u  route %s  fw #%d\n",
+           ttl, ttl - 1, routing_table[line].text, rule + 1);
 }
 
 /* ---- M5: router mode: open both doors, then forward until Ctrl+C ---- */
@@ -577,6 +685,12 @@ static int run_router(void)
     printf("Forwarded : %lu\n", forwarded);
     printf("Dropped   : %lu\n", dropped);
     printf("ICMP sent : %lu\n", icmp_sent);
+
+    printf("\n--- Firewall rules (hits) ---\n");
+    for (int r = 0; r < FW_RULE_COUNT; r++) {
+        printf(" #%d  %-36s %lu\n", r + 1, fw_rules[r].text, fw_rules[r].hits);
+    }
+    printf("     %-36s %lu\n", "DENY  everything else (default)", fw_default_hits);
 
     for (int i = 0; i < IFACE_COUNT; i++) {
         close(ifaces[i].sock);

@@ -49,6 +49,14 @@ ip -n router link set eth0 up
 ip -n router link set eth1 up
 ip -n pc-b   link set eth0 up
 
+# 4b. Turn off TX checksum offload on the PCs (M9). Otherwise Linux leaves the
+#     TCP/UDP checksum unfinished, and since the C router copies raw bytes,
+#     the receiver would get a wrong checksum and drop the packet.
+if command -v ethtool >/dev/null; then
+  ip netns exec pc-a ethtool -K eth0 tx off >/dev/null
+  ip netns exec pc-b ethtool -K eth0 tx off >/dev/null
+fi
+
 # 5. Default gateways
 ip -n pc-a route add default via 10.0.1.1
 ip -n pc-b route add default via 10.0.2.1

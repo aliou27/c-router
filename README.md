@@ -48,7 +48,7 @@ software router.
 
 The router is built incrementally. Each milestone adds one capability and is documented with tests and packet captures.
 
-**Progress: 7 / 18 milestones complete** (M0 to M6)
+**Progress: 8 / 18 milestones complete** (M0 to M6, M9)
 
 ### Phase 1: Foundations
 
@@ -73,7 +73,7 @@ The router is built incrementally. Each milestone adds one capability and is doc
 
 | #   | Milestone                  | What it covers                                        | Status      | Docs |
 |-----|----------------------------|-------------------------------------------------------|-------------|------|
-| M9  | Firewall                   | Rule-based packet filtering                           | Planned     | |
+| M9  | Firewall                   | Rule-based packet filtering                           | Done        | [M9](docs/m9-firewall.md) |
 | M10 | NAT                        | SNAT, PAT, connection tracking                        | Planned     | |
 | M11 | Configuration              | Config file instead of hardcoded values               | Planned     | |
 | M12 | Observability              | Counters, drops, logs                                 | Planned     | |
